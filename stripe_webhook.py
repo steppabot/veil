@@ -41,12 +41,18 @@ def webhook():
             price_id = session.get("metadata", {}).get("price_id")
 
         tier_map = {
-            "price_1MlYkPCoOLdI6N8uXZzP1HZn": "basic",
-            "price_1MlYkZCoOLdI6N8ukTSXHeEo": "premium",
-            "price_1MlYkiCoOLdI6N8uhTjwA3dU": "elite"
+            "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
+            "price_1RoyTeADYgCtNnMolB6Za0e4": "premium",
+            "price_1RoyUCADYgCtNnMomn9anPQf": "elite"
         }
 
         subscription_tier = tier_map.get(price_id)
+
+        print("🧾 Stripe Session Info:")
+        print("  client_reference_id (user_id):", discord_user_id)
+        print("  guild_id:", guild_id)
+        print("  price_id:", price_id)
+        print("  subscription_tier:", subscription_tier)
 
         if subscription_tier and guild_id:
             try:
@@ -62,6 +68,7 @@ def webhook():
                     print(f"✅ Updated subscription: guild_id={guild_id}, tier={subscription_tier}")
             except Exception as e:
                 print("❌ DB error:", e)
+                print("⚠️ Data was — guild_id:", guild_id, "tier:", subscription_tier)
                 return "Database error", 500
 
     return jsonify(success=True)
