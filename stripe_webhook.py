@@ -88,29 +88,18 @@ def webhook():
     # ✅ Handle renewals via invoice payment
     elif event["type"] == "invoice.payment_succeeded":
         invoice = event["data"]["object"]
-
-        # ⏩ Skip initial invoice (already handled above)
-        if invoice.get("billing_reason") == "subscription_create":
-            print("⏩ Skipping initial invoice (handled by checkout.session.completed)")
-            return jsonify(success=True)
-
-        renews_at = None
-        try:
-            line_items = invoice.get("lines", {}).get("data", [])
-            if line_items:
-                period_end = line_items[0]["period"].get("end")
-                if period_end:
-                    renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
-        except Exception as e:
-            print("⚠️ Could not extract period end:", e)
-
         subscription_id = invoice.get("subscription")
+
         if subscription_id:
             try:
                 sub = stripe.Subscription.retrieve(subscription_id)
                 price_id = sub.get("items", {}).get("data", [])[0].get("price", {}).get("id")
                 guild_id = sub.get("metadata", {}).get("guild_id")
                 subscription_tier = tier_map.get(price_id)
+
+                # ✅ Use current_period_end from subscription object
+                period_end = sub.get("current_period_end")
+                renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc) if period_end else None
 
                 if subscription_tier and guild_id:
                     with get_db_conn() as conn:
