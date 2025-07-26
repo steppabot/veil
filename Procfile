@@ -1,1 +1,1 @@
-web: gunicorn server:app
+web: gunicorn stripe_webhook:app
