@@ -54,16 +54,22 @@ def webhook():
         print("  subscription_tier:", subscription_tier)
 
         # 🕓 Fetch subscription renew date
-        renews_at = None
         try:
             subscription_id = session.get("subscription")
             if subscription_id:
                 sub = stripe.Subscription.retrieve(subscription_id)
                 print("🔍 Stripe Subscription Object:", sub)
-                period_end = sub.get("current_period_end")
-                if period_end:
+        
+                items = sub.get("items", {}).get("data", [])
+                if items and items[0].get("current_period_end"):
+                    period_end = items[0]["current_period_end"]
                     renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
+                    print(f"✅ Parsed renew date: {renews_at}")
+                else:
+                    renews_at = None
+                    print("⚠️ Subscription item missing current_period_end")
         except Exception as sub_err:
+            renews_at = None
             print("⚠️ Could not fetch subscription:", sub_err)
 
         if subscription_tier and guild_id:
