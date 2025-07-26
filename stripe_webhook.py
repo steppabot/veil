@@ -23,6 +23,31 @@ tier_map = {
     "price_1RoUocADYgCtNnMo84swUnP1": "elite",
 }
 
+# 🔁 Bonus helper
+def apply_bonus_for_tier(guild_id, tier):
+    bonus_amounts = {
+        "basic": 250,
+        "premium": 500
+    }
+    bonus = bonus_amounts.get(tier)
+    if not bonus:
+        return  # Skip for free or elite
+
+    now = datetime.now(timezone.utc)
+    try:
+        with get_db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE veil_users
+                    SET coins = coins + %s,
+                        last_refill = %s
+                    WHERE guild_id = %s
+                """, (bonus, now, guild_id))
+                conn.commit()
+                print(f"💰 Bonus coins applied: +{bonus} to all users in guild {guild_id}")
+    except Exception as e:
+        print("❌ Failed to apply bonus coins:", e)
+
 @app.route("/stripe-webhook", methods=["POST"])
 def webhook():
     payload = request.data
@@ -59,7 +84,7 @@ def webhook():
             if subscription_id:
                 sub = stripe.Subscription.retrieve(subscription_id)
                 print("🔍 Stripe Subscription Object:", sub)
-        
+
                 items = sub.get("items", {}).get("data", [])
                 if items and items[0].get("current_period_end"):
                     period_end = items[0]["current_period_end"]
@@ -86,6 +111,10 @@ def webhook():
                         ''', (guild_id, subscription_tier, renews_at))
                         conn.commit()
                         print(f"✅ Updated subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
+
+                # 🪙 Apply bonus coins after successful subscription update
+                apply_bonus_for_tier(guild_id, subscription_tier)
+
             except Exception as e:
                 print("❌ DB error:", e)
                 print("⚠️ Data was — guild_id:", guild_id, "tier:", subscription_tier)
@@ -103,7 +132,6 @@ def webhook():
                 guild_id = sub.get("metadata", {}).get("guild_id")
                 subscription_tier = tier_map.get(price_id)
 
-                # ✅ Use current_period_end from subscription object
                 period_end = sub.get("current_period_end")
                 renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc) if period_end else None
 
@@ -120,6 +148,10 @@ def webhook():
                             ''', (guild_id, subscription_tier, renews_at))
                             conn.commit()
                             print(f"✅ Renewed subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
+
+                    # 🪙 Apply bonus coins on renewal
+                    apply_bonus_for_tier(guild_id, subscription_tier)
+
             except Exception as e:
                 print("❌ DB error during renewal:", e)
 
