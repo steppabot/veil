@@ -28,12 +28,12 @@ def webhook():
     except stripe.error.SignatureVerificationError:
         return "Invalid signature", 400
 
+    # Handle checkout completion
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         discord_user_id = session.get("client_reference_id")
         guild_id = session.get("metadata", {}).get("guild_id")
 
-        # Match link to tier using the actual price ID in Stripe (replace with real ones)
         price_id = session.get("display_items", [{}])[0].get("price", {}).get("id")
         if not price_id:
             price_id = session.get("metadata", {}).get("price_id")
@@ -43,29 +43,29 @@ def webhook():
             "price_1RoUhOADYgCtNnMo4sUwjusM": "premium",
             "price_1RoUocADYgCtNnMo84swUnP1": "elite"
         }
+
         subscription_tier = tier_map.get(price_id)
 
+        # 🧾 Log details
         print("🧾 Stripe Session Info:")
         print("  client_reference_id (user_id):", discord_user_id)
         print("  guild_id:", guild_id)
         print("  price_id:", price_id)
         print("  subscription_tier:", subscription_tier)
 
+        # 🔁 Try to fetch renews_at from subscription
+        renews_at = None
+        subscription_id = session.get("subscription")
+        if subscription_id:
+            try:
+                subscription_obj = stripe.Subscription.retrieve(subscription_id)
+                renews_at_unix = subscription_obj["current_period_end"]
+                renews_at = datetime.fromtimestamp(renews_at_unix, tz=timezone.utc)
+            except Exception as e:
+                print("⚠️ Could not fetch subscription:", e)
+
         if subscription_tier and guild_id:
             try:
-                # Get Stripe subscription ID
-                subscription_id = session.get("subscription")
-                renews_at = None
-
-                if subscription_id:
-                    try:
-                        sub = stripe.Subscription.retrieve(subscription_id)
-                        paid_until_unix = sub.get("current_period_end")
-                        if paid_until_unix:
-                            renews_at = datetime.fromtimestamp(paid_until_unix, tz=timezone.utc)
-                    except Exception as sub_err:
-                        print("⚠️ Failed to fetch subscription:", sub_err)
-
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at, renews_at)
@@ -86,4 +86,7 @@ def webhook():
 
 @app.route("/")
 def home():
-    return "VeilBot Stripe Webhook is Live ✅"
+    return "✅ Veil Webhook Server is Live!"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
