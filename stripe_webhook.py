@@ -88,8 +88,13 @@ def webhook():
     # ✅ Handle renewals via invoice payment
     elif event["type"] == "invoice.payment_succeeded":
         invoice = event["data"]["object"]
-        renews_at = None
 
+        # ⏩ Skip initial invoice (already handled above)
+        if invoice.get("billing_reason") == "subscription_create":
+            print("⏩ Skipping initial invoice (handled by checkout.session.completed)")
+            return jsonify(success=True)
+
+        renews_at = None
         try:
             line_items = invoice.get("lines", {}).get("data", [])
             if line_items:
