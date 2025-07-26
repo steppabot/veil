@@ -10,7 +10,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Stripe secrets
-stripe.api_key = os.getenv("STRIPE_TEST_KEY")
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 # Connect to your database
