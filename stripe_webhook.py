@@ -40,10 +40,9 @@ def webhook():
             price_id = session.get("metadata", {}).get("price_id")
 
         tier_map = {
-            "price_1RoUeqADYgCtNnMoeFvB8uDf": "basic",
+            "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
             "price_1RoUhOADYgCtNnMo4sUwjusM": "premium",
             "price_1RoUocADYgCtNnMo84swUnP1": "elite",
-            "price_1RowtmADYgCtNnMoK5UfUZFc": "basic"  # Test basic
         }
 
         subscription_tier = tier_map.get(price_id)
