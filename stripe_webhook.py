@@ -33,6 +33,7 @@ def webhook():
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         discord_user_id = session.get("client_reference_id")
+        guild_id = session.get("metadata", {}).get("guild_id")
 
         # Match link to tier using the actual price ID in Stripe (replace with real ones)
         price_id = session.get("display_items", [{}])[0].get("price", {}).get("id")
@@ -46,15 +47,16 @@ def webhook():
         }
 
         subscription_tier = tier_map.get(price_id)
-        if subscription_tier and discord_user_id:
+
+        if subscription_tier and discord_user_id and guild_id:
             try:
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO veil_users (user_id, guild_id, coins, veils_unveiled, subscription_tier)
-                        VALUES (%s, 0, 0, 0, %s)
+                        VALUES (%s, %s, 0, 0, %s)
                         ON CONFLICT (user_id, guild_id) DO UPDATE
                         SET subscription_tier = EXCLUDED.subscription_tier
-                    ''', (discord_user_id, subscription_tier))
+                    ''', (discord_user_id, guild_id, subscription_tier))
                     conn.commit()
             except Exception as e:
                 print("❌ DB error:", e)
@@ -68,4 +70,3 @@ def home():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
