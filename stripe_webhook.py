@@ -17,6 +17,13 @@ endpoint_secret = os.getenv("STRIPE_TEST_WEBHOOK")
 def get_db_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
+# Tier mapping
+tier_map = {
+    "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
+    "price_1RoUhOADYgCtNnMo4sUwjusM": "premium",
+    "price_1RoUocADYgCtNnMo84swUnP1": "elite",
+}
+
 @app.route("/stripe-webhook", methods=["POST"])
 def webhook():
     payload = request.data
@@ -29,7 +36,7 @@ def webhook():
     except stripe.error.SignatureVerificationError:
         return "Invalid signature", 400
 
-    # Handle completed payment session
+    # ✅ Handle checkout completion
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         discord_user_id = session.get("client_reference_id")
@@ -39,12 +46,6 @@ def webhook():
         if not price_id:
             price_id = session.get("metadata", {}).get("price_id")
 
-        tier_map = {
-            "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
-            "price_1RoUhOADYgCtNnMo4sUwjusM": "premium",
-            "price_1RoUocADYgCtNnMo84swUnP1": "elite",
-        }
-
         subscription_tier = tier_map.get(price_id)
 
         print("🧾 Stripe Session Info:")
@@ -53,7 +54,7 @@ def webhook():
         print("  price_id:", price_id)
         print("  subscription_tier:", subscription_tier)
 
-        # Get subscription object to fetch period end timestamp
+        # 🕓 Fetch subscription renew date
         renews_at = None
         try:
             subscription_id = session.get("subscription")
@@ -84,6 +85,44 @@ def webhook():
                 print("❌ DB error:", e)
                 print("⚠️ Data was — guild_id:", guild_id, "tier:", subscription_tier)
                 return "Database error", 500
+
+    # ✅ Handle subscription renewals
+    elif event["type"] == "invoice.payment_succeeded":
+        invoice = event["data"]["object"]
+        line_items = invoice.get("lines", {}).get("data", [])
+        renews_at = None
+
+        try:
+            if line_items and "period" in line_items[0]:
+                period_end = line_items[0]["period"].get("end")
+                if period_end:
+                    renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
+        except Exception as e:
+            print("⚠️ Failed to extract period end from invoice:", e)
+
+        subscription_id = invoice.get("subscription")
+        try:
+            if subscription_id:
+                sub = stripe.Subscription.retrieve(subscription_id)
+                price_id = sub.get("items", {}).get("data", [])[0].get("price", {}).get("id")
+                guild_id = sub.get("metadata", {}).get("guild_id")
+                subscription_tier = tier_map.get(price_id)
+
+                if subscription_tier and guild_id:
+                    with get_db_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute('''
+                                INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at, renews_at)
+                                VALUES (%s, %s, NOW(), %s)
+                                ON CONFLICT (guild_id) DO UPDATE
+                                SET tier = EXCLUDED.tier,
+                                    subscribed_at = NOW(),
+                                    renews_at = EXCLUDED.renews_at
+                            ''', (guild_id, subscription_tier, renews_at))
+                            conn.commit()
+                            print(f"✅ Renewed subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
+        except Exception as e:
+            print("❌ DB error in renewal:", e)
 
     return jsonify(success=True)
 
