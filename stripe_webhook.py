@@ -60,6 +60,7 @@ def webhook():
             subscription_id = session.get("subscription")
             if subscription_id:
                 sub = stripe.Subscription.retrieve(subscription_id)
+                print("🔍 Stripe Subscription Object:", sub)
                 period_end = sub.get("current_period_end")
                 if period_end:
                     renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
