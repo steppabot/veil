@@ -1,0 +1,5 @@
+Flask
+stripe
+psycopg2-binary
+python-dotenv
+gunicorn
