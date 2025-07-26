@@ -3,6 +3,7 @@ import stripe
 import psycopg2
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 load_dotenv()
 
@@ -21,15 +22,12 @@ def webhook():
     sig_header = request.headers.get("stripe-signature")
 
     try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, endpoint_secret
-        )
+        event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
     except ValueError:
         return "Invalid payload", 400
     except stripe.error.SignatureVerificationError:
         return "Invalid signature", 400
 
-    # Handle completed payment session
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         discord_user_id = session.get("client_reference_id")
@@ -41,11 +39,10 @@ def webhook():
             price_id = session.get("metadata", {}).get("price_id")
 
         tier_map = {
-            "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
-            "price_1RoyTeADYgCtNnMolB6Za0e4": "premium",
-            "price_1RoyUCADYgCtNnMomn9anPQf": "elite"
+            "price_1RoUeqADYgCtNnMoeFvB8uDf": "basic",
+            "price_1RoUhOADYgCtNnMo4sUwjusM": "premium",
+            "price_1RoUocADYgCtNnMo84swUnP1": "elite"
         }
-
         subscription_tier = tier_map.get(price_id)
 
         print("🧾 Stripe Session Info:")
@@ -56,16 +53,30 @@ def webhook():
 
         if subscription_tier and guild_id:
             try:
+                # Get Stripe subscription ID
+                subscription_id = session.get("subscription")
+                renews_at = None
+
+                if subscription_id:
+                    try:
+                        sub = stripe.Subscription.retrieve(subscription_id)
+                        paid_until_unix = sub.get("current_period_end")
+                        if paid_until_unix:
+                            renews_at = datetime.fromtimestamp(paid_until_unix, tz=timezone.utc)
+                    except Exception as sub_err:
+                        print("⚠️ Failed to fetch subscription:", sub_err)
+
                 with conn.cursor() as cur:
                     cur.execute('''
-                        INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at)
-                        VALUES (%s, %s, NOW())
+                        INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at, renews_at)
+                        VALUES (%s, %s, NOW(), %s)
                         ON CONFLICT (guild_id) DO UPDATE
                         SET tier = EXCLUDED.tier,
-                            subscribed_at = NOW()
-                    ''', (guild_id, subscription_tier))
+                            subscribed_at = NOW(),
+                            renews_at = EXCLUDED.renews_at
+                    ''', (guild_id, subscription_tier, renews_at))
                     conn.commit()
-                    print(f"✅ Updated subscription: guild_id={guild_id}, tier={subscription_tier}")
+                    print(f"✅ Updated subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
             except Exception as e:
                 print("❌ DB error:", e)
                 print("⚠️ Data was — guild_id:", guild_id, "tier:", subscription_tier)
@@ -75,7 +86,4 @@ def webhook():
 
 @app.route("/")
 def home():
-    return "✅ Veil Webhook Server is Live!"
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    return "VeilBot Stripe Webhook is Live ✅"
