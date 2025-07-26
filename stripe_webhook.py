@@ -9,7 +9,6 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Stripe secrets
 stripe.api_key = os.getenv("STRIPE_TEST_KEY")
 endpoint_secret = os.getenv("STRIPE_TEST_WEBHOOK")
 
@@ -86,23 +85,23 @@ def webhook():
                 print("⚠️ Data was — guild_id:", guild_id, "tier:", subscription_tier)
                 return "Database error", 500
 
-    # ✅ Handle subscription renewals
+    # ✅ Handle renewals via invoice payment
     elif event["type"] == "invoice.payment_succeeded":
         invoice = event["data"]["object"]
-        line_items = invoice.get("lines", {}).get("data", [])
         renews_at = None
 
         try:
-            if line_items and "period" in line_items[0]:
+            line_items = invoice.get("lines", {}).get("data", [])
+            if line_items:
                 period_end = line_items[0]["period"].get("end")
                 if period_end:
                     renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
         except Exception as e:
-            print("⚠️ Failed to extract period end from invoice:", e)
+            print("⚠️ Could not extract period end:", e)
 
         subscription_id = invoice.get("subscription")
-        try:
-            if subscription_id:
+        if subscription_id:
+            try:
                 sub = stripe.Subscription.retrieve(subscription_id)
                 price_id = sub.get("items", {}).get("data", [])[0].get("price", {}).get("id")
                 guild_id = sub.get("metadata", {}).get("guild_id")
@@ -121,8 +120,8 @@ def webhook():
                             ''', (guild_id, subscription_tier, renews_at))
                             conn.commit()
                             print(f"✅ Renewed subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
-        except Exception as e:
-            print("❌ DB error in renewal:", e)
+            except Exception as e:
+                print("❌ DB error during renewal:", e)
 
     return jsonify(success=True)
 
