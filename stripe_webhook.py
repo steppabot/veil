@@ -48,16 +48,18 @@ def webhook():
 
         subscription_tier = tier_map.get(price_id)
 
-        if subscription_tier and discord_user_id and guild_id:
+        if subscription_tier and guild_id:
             try:
                 with conn.cursor() as cur:
                     cur.execute('''
-                        INSERT INTO veil_users (user_id, guild_id, coins, veils_unveiled, subscription_tier)
-                        VALUES (%s, %s, 0, 0, %s)
-                        ON CONFLICT (user_id, guild_id) DO UPDATE
-                        SET subscription_tier = EXCLUDED.subscription_tier
-                    ''', (discord_user_id, guild_id, subscription_tier))
+                        INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (guild_id) DO UPDATE
+                        SET tier = EXCLUDED.tier,
+                            subscribed_at = NOW()
+                    ''', (guild_id, subscription_tier))
                     conn.commit()
+                    print(f"✅ Updated subscription: guild_id={guild_id}, tier={subscription_tier}")
             except Exception as e:
                 print("❌ DB error:", e)
                 return "Database error", 500
