@@ -182,9 +182,25 @@ def webhook():
             except Exception as e:
                 print("❌ DB error on failed payment:", e)
 
+    # ❌ Handle customer cancelation
+    elif event["type"] == "customer.subscription.deleted":
+        sub = event["data"]["object"]
+        guild_id = sub.get("metadata", {}).get("guild_id")
+        if guild_id:
+            with get_db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE veil_subscriptions
+                        SET tier = 'free',
+                            subscribed_at = NOW(),
+                            renews_at = NULL
+                    WHERE guild_id = %s
+                    """, (guild_id,))
+                    conn.commit()
+                    print(f"❌ Subscription canceled: guild {guild_id} downgraded to free")
+    
     return jsonify(success=True)
     
-
 @app.route("/")
 def home():
     return "VeilBot Stripe Webhook Active!"
