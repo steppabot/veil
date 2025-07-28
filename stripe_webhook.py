@@ -155,7 +155,35 @@ def webhook():
             except Exception as e:
                 print("❌ DB error during renewal:", e)
 
+    # ❌ Handle failed payment
+    elif event["type"] == "invoice.payment_failed":
+        invoice = event["data"]["object"]
+        subscription_id = invoice.get("subscription")
+
+        if subscription_id:
+            try:
+                sub = stripe.Subscription.retrieve(subscription_id)
+                guild_id = sub.get("metadata", {}).get("guild_id")
+
+                if guild_id:
+                    with get_db_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute('''
+                                UPDATE veil_subscriptions
+                                SET tier = 'free',
+                                    subscribed_at = NOW(),
+                                    renews_at = NULL,
+                                    payment_failed = TRUE
+                                WHERE guild_id = %s
+                            ''', (guild_id,))
+                            conn.commit()
+                            print(f"⚠️ Payment failed: Reverted guild {guild_id} to free tier and flagged for bot notification")
+
+            except Exception as e:
+                print("❌ DB error on failed payment:", e)
+
     return jsonify(success=True)
+    
 
 @app.route("/")
 def home():
