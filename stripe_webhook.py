@@ -19,8 +19,8 @@ def get_db_conn():
 # Tier mapping
 tier_map = {
     "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
-    "price_1RoUhOADYgCtNnMo4sUwjusM": "premium",
-    "price_1RoUocADYgCtNnMo84swUnP1": "elite",
+    "price_1RoyTeADYgCtNnMolB6Za0e4": "premium",
+    "price_1RoyUCADYgCtNnMomn9anPQf": "elite",
 }
 
 # 🔁 Bonus helper
