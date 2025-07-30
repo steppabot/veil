@@ -76,7 +76,7 @@ def webhook():
 
     print(f"🔔 Stripe Event: {event['type']}")
 
-    # 1️⃣ Checkout session completed → stage subscription
+    # 1️⃣ Checkout session completed → stage subscription (with renews_at)
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         discord_user_id = session.get("client_reference_id")
@@ -92,29 +92,40 @@ def webhook():
         subscription_tier = tier_map.get(price_id)
         subscription_id = session.get("subscription")
 
+        # ✅ Fetch subscription to get current_period_end for renews_at
+        renews_at = None
+        if subscription_id:
+            try:
+                sub = stripe.Subscription.retrieve(subscription_id)
+                period_end = sub.get("current_period_end")
+                renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc) if period_end else None
+            except Exception as e:
+                print(f"⚠️ Could not retrieve subscription {subscription_id}: {e}")
+
         print("🧾 Checkout Info:")
         print("  client_reference_id:", discord_user_id)
         print("  guild_id:", guild_id)
         print("  price_id:", price_id)
         print("  subscription_tier:", subscription_tier)
         print("  subscription_id:", subscription_id)
+        print("  renews_at:", renews_at)
 
-        # Stage subscription with renews_at = NULL
+        # Stage subscription with real renews_at
         if subscription_tier and guild_id:
             try:
                 with get_db_conn() as conn:
                     with conn.cursor() as cur:
                         cur.execute('''
                             INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at, renews_at, subscription_id)
-                            VALUES (%s, %s, NOW(), NULL, %s)
+                            VALUES (%s, %s, NOW(), %s, %s)
                             ON CONFLICT (guild_id) DO UPDATE
                             SET tier = EXCLUDED.tier,
                                 subscribed_at = NOW(),
-                                renews_at = NULL,
+                                renews_at = EXCLUDED.renews_at,
                                 subscription_id = EXCLUDED.subscription_id
-                        ''', (guild_id, subscription_tier, subscription_id))
+                        ''', (guild_id, subscription_tier, renews_at, subscription_id))
                         conn.commit()
-                        print(f"✅ Staged subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at=None")
+                        print(f"✅ Staged subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
 
                 apply_bonus_for_tier(guild_id, subscription_tier)
                 notify_support_server(guild_id, subscription_tier)
