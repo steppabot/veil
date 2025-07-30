@@ -44,7 +44,8 @@ def apply_bonus_for_tier(guild_id, tier):
     }
     bonus = bonus_amounts.get(tier)
     if not bonus:
-        return  # Skip for free or elite
+        print(f"ℹ️ No bonus applied for tier: {tier}")
+        return
 
     now = datetime.now(timezone.utc)
     try:
@@ -69,13 +70,13 @@ def webhook():
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
     except ValueError:
-        print("❌ Invalid payload received")
+        print("❌ Invalid payload")
         return "Invalid payload", 400
     except stripe.error.SignatureVerificationError:
-        print("❌ Invalid Stripe signature")
+        print("❌ Invalid signature")
         return "Invalid signature", 400
 
-    print("🔔 Stripe event received:", event["type"])
+    print(f"🔔 Received Stripe Event: {event['type']}")
 
     # ✅ Handle checkout completion
     if event["type"] == "checkout.session.completed":
@@ -83,6 +84,7 @@ def webhook():
         discord_user_id = session.get("client_reference_id")
         guild_id = session.get("metadata", {}).get("guild_id")
 
+        # Detect price ID (fallback to metadata if needed)
         price_id = session.get("display_items", [{}])[0].get("price", {}).get("id")
         if not price_id:
             price_id = session.get("metadata", {}).get("price_id")
@@ -96,24 +98,21 @@ def webhook():
         print("  subscription_tier:", subscription_tier)
 
         # 🕓 Fetch subscription renew date
+        renews_at = None
         try:
             subscription_id = session.get("subscription")
             if subscription_id:
                 sub = stripe.Subscription.retrieve(subscription_id)
                 print("🔍 Stripe Subscription Object:", sub)
 
+                # ✅ Use top-level current_period_end
                 period_end = sub.get("current_period_end")
                 if period_end:
                     renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
                     print(f"✅ Parsed renew date: {renews_at}")
                 else:
-                    renews_at = None
                     print("⚠️ Subscription missing current_period_end")
-            else:
-                renews_at = None
-                print("⚠️ No subscription ID on session")
         except Exception as sub_err:
-            renews_at = None
             print("⚠️ Could not fetch subscription:", sub_err)
 
         if subscription_tier and guild_id:
@@ -136,7 +135,7 @@ def webhook():
                 notify_support_server(guild_id, subscription_tier)
 
             except Exception as e:
-                print("❌ DB error on checkout:", e)
+                print("❌ DB error:", e)
                 print("⚠️ Data was — guild_id:", guild_id, "tier:", subscription_tier)
                 return "Database error", 500
 
@@ -144,13 +143,10 @@ def webhook():
     elif event["type"] == "invoice.payment_succeeded":
         invoice = event["data"]["object"]
         subscription_id = invoice.get("subscription")
-        print("💰 Invoice payment succeeded for subscription:", subscription_id)
 
         if subscription_id:
             try:
                 sub = stripe.Subscription.retrieve(subscription_id)
-                print("🔍 Stripe Subscription Object:", sub)
-
                 price_id = sub.get("items", {}).get("data", [])[0].get("price", {}).get("id")
                 guild_id = sub.get("metadata", {}).get("guild_id")
                 subscription_tier = tier_map.get(price_id)
@@ -158,10 +154,7 @@ def webhook():
                 period_end = sub.get("current_period_end")
                 renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc) if period_end else None
 
-                print("🧾 Renewal Info:")
-                print("  guild_id:", guild_id)
-                print("  subscription_tier:", subscription_tier)
-                print("  renews_at:", renews_at)
+                print(f"♻️ Renewal processed for guild {guild_id}, tier={subscription_tier}, renews_at={renews_at}")
 
                 if subscription_tier and guild_id:
                     with get_db_conn() as conn:
@@ -188,7 +181,6 @@ def webhook():
     elif event["type"] == "invoice.payment_failed":
         invoice = event["data"]["object"]
         subscription_id = invoice.get("subscription")
-        print("⚠️ Invoice payment failed for subscription:", subscription_id)
 
         if subscription_id:
             try:
@@ -216,8 +208,6 @@ def webhook():
     elif event["type"] == "customer.subscription.deleted":
         sub = event["data"]["object"]
         guild_id = sub.get("metadata", {}).get("guild_id")
-        print("🛑 Subscription canceled for guild:", guild_id)
-
         if guild_id:
             with get_db_conn() as conn:
                 with conn.cursor() as cur:
