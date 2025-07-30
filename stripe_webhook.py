@@ -27,7 +27,8 @@ tier_map = {
 def apply_bonus_for_tier(guild_id, tier):
     bonus_amounts = {
         "basic": 250,
-        "premium": 500
+        "premium": 500,
+        "elite": 9999
     }
     bonus = bonus_amounts.get(tier)
     if not bonus:
