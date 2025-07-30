@@ -4,8 +4,20 @@ import psycopg2
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+import requests
 
 load_dotenv()
+
+SUPPORT_WEBHOOK = os.getenv("SUPPORT_WEBHOOK")  # Your support server's webhook URL
+
+def notify_support_server(guild_id: int, tier: str):
+    try:
+        requests.post(SUPPORT_WEBHOOK, json={
+            "content": f"🎉 Guild `{guild_id}` upgraded to **{tier.title()}** tier!"
+        })
+        print(f"📢 Support server notified about guild {guild_id} upgrade.")
+    except Exception as e:
+        print("❌ Failed to notify support server:", e)
 
 app = Flask(__name__)
 
@@ -115,6 +127,7 @@ def webhook():
 
                 # 🪙 Apply bonus coins after successful subscription update
                 apply_bonus_for_tier(guild_id, subscription_tier)
+                notify_support_server(guild_id, subscription_tier)
 
             except Exception as e:
                 print("❌ DB error:", e)
@@ -152,6 +165,7 @@ def webhook():
 
                     # 🪙 Apply bonus coins on renewal
                     apply_bonus_for_tier(guild_id, subscription_tier)
+                    notify_support_server(guild_id, subscription_tier)
 
             except Exception as e:
                 print("❌ DB error during renewal:", e)
