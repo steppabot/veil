@@ -8,7 +8,13 @@ import requests
 
 load_dotenv()
 
-SUPPORT_WEBHOOK = os.getenv("SUPPORT_WEBHOOK")  # Your support server's webhook URL
+app = Flask(__name__)
+
+# Stripe setup
+stripe.api_key = os.getenv("STRIPE_TEST_KEY")
+endpoint_secret = os.getenv("STRIPE_TEST_WEBHOOK")
+
+SUPPORT_WEBHOOK = os.getenv("SUPPORT_WEBHOOK")
 
 def notify_support_server(guild_id: int, tier: str):
     try:
@@ -19,23 +25,15 @@ def notify_support_server(guild_id: int, tier: str):
     except Exception as e:
         print("❌ Failed to notify support server:", e)
 
-app = Flask(__name__)
-
-stripe.api_key = os.getenv("STRIPE_TEST_KEY")
-endpoint_secret = os.getenv("STRIPE_TEST_WEBHOOK")
-
-# Helper to get fresh DB connection
 def get_db_conn():
     return psycopg2.connect(os.getenv("DATABASE_URL"), sslmode="require")
 
-# Tier mapping
 tier_map = {
     "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
     "price_1RoyTeADYgCtNnMolB6Za0e4": "premium",
     "price_1RoyUCADYgCtNnMomn9anPQf": "elite",
 }
 
-# 🔁 Bonus helper
 def apply_bonus_for_tier(guild_id, tier):
     bonus_amounts = {
         "basic": 250,
@@ -76,70 +74,55 @@ def webhook():
         print("❌ Invalid signature")
         return "Invalid signature", 400
 
-    print(f"🔔 Received Stripe Event: {event['type']}")
+    print(f"🔔 Stripe Event: {event['type']}")
 
-    # ✅ Handle checkout completion
+    # 1️⃣ Checkout session completed → stage subscription
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         discord_user_id = session.get("client_reference_id")
         guild_id = session.get("metadata", {}).get("guild_id")
 
-        # Detect price ID (fallback to metadata if needed)
-        price_id = session.get("display_items", [{}])[0].get("price", {}).get("id")
+        price_id = None
+        # Stripe Checkout v2 structure
+        if session.get("display_items"):
+            price_id = session["display_items"][0].get("price", {}).get("id")
         if not price_id:
             price_id = session.get("metadata", {}).get("price_id")
 
         subscription_tier = tier_map.get(price_id)
+        subscription_id = session.get("subscription")
 
-        print("🧾 Stripe Session Info:")
-        print("  client_reference_id (user_id):", discord_user_id)
+        print("🧾 Checkout Info:")
+        print("  client_reference_id:", discord_user_id)
         print("  guild_id:", guild_id)
         print("  price_id:", price_id)
         print("  subscription_tier:", subscription_tier)
+        print("  subscription_id:", subscription_id)
 
-        # 🕓 Fetch subscription renew date
-        renews_at = None
-        try:
-            subscription_id = session.get("subscription")
-            if subscription_id:
-                sub = stripe.Subscription.retrieve(subscription_id)
-                print("🔍 Stripe Subscription Object:", sub)
-
-                # ✅ Use top-level current_period_end
-                period_end = sub.get("current_period_end")
-                if period_end:
-                    renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc)
-                    print(f"✅ Parsed renew date: {renews_at}")
-                else:
-                    print("⚠️ Subscription missing current_period_end")
-        except Exception as sub_err:
-            print("⚠️ Could not fetch subscription:", sub_err)
-
+        # Stage subscription with renews_at = NULL
         if subscription_tier and guild_id:
             try:
                 with get_db_conn() as conn:
                     with conn.cursor() as cur:
                         cur.execute('''
-                            INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at, renews_at)
-                            VALUES (%s, %s, NOW(), %s)
+                            INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at, renews_at, subscription_id)
+                            VALUES (%s, %s, NOW(), NULL, %s)
                             ON CONFLICT (guild_id) DO UPDATE
                             SET tier = EXCLUDED.tier,
                                 subscribed_at = NOW(),
-                                renews_at = EXCLUDED.renews_at
-                        ''', (guild_id, subscription_tier, renews_at))
+                                renews_at = NULL,
+                                subscription_id = EXCLUDED.subscription_id
+                        ''', (guild_id, subscription_tier, subscription_id))
                         conn.commit()
-                        print(f"✅ Updated subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
+                        print(f"✅ Staged subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at=None")
 
-                # 🪙 Apply bonus coins after successful subscription update
                 apply_bonus_for_tier(guild_id, subscription_tier)
                 notify_support_server(guild_id, subscription_tier)
 
             except Exception as e:
-                print("❌ DB error:", e)
-                print("⚠️ Data was — guild_id:", guild_id, "tier:", subscription_tier)
-                return "Database error", 500
+                print("❌ DB error during checkout.session.completed:", e)
 
-    # ✅ Handle renewals via invoice payment
+    # 2️⃣ Invoice payment succeeded → finalize subscription (populate renews_at)
     elif event["type"] == "invoice.payment_succeeded":
         invoice = event["data"]["object"]
         subscription_id = invoice.get("subscription")
@@ -147,37 +130,52 @@ def webhook():
         if subscription_id:
             try:
                 sub = stripe.Subscription.retrieve(subscription_id)
-                price_id = sub.get("items", {}).get("data", [])[0].get("price", {}).get("id")
+                price_id = sub["items"]["data"][0]["price"]["id"]
                 guild_id = sub.get("metadata", {}).get("guild_id")
                 subscription_tier = tier_map.get(price_id)
 
                 period_end = sub.get("current_period_end")
                 renews_at = datetime.fromtimestamp(period_end, tz=timezone.utc) if period_end else None
 
-                print(f"♻️ Renewal processed for guild {guild_id}, tier={subscription_tier}, renews_at={renews_at}")
+                print(f"♻️ Finalizing subscription: guild={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
 
                 if subscription_tier and guild_id:
                     with get_db_conn() as conn:
                         with conn.cursor() as cur:
                             cur.execute('''
-                                INSERT INTO veil_subscriptions (guild_id, tier, subscribed_at, renews_at)
-                                VALUES (%s, %s, NOW(), %s)
-                                ON CONFLICT (guild_id) DO UPDATE
-                                SET tier = EXCLUDED.tier,
+                                UPDATE veil_subscriptions
+                                SET tier = %s,
                                     subscribed_at = NOW(),
-                                    renews_at = EXCLUDED.renews_at
-                            ''', (guild_id, subscription_tier, renews_at))
+                                    renews_at = %s
+                                WHERE guild_id = %s
+                            ''', (subscription_tier, renews_at, guild_id))
                             conn.commit()
-                            print(f"✅ Renewed subscription: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
+                            print(f"✅ Subscription finalized: guild_id={guild_id}, tier={subscription_tier}, renews_at={renews_at}")
 
-                    # 🪙 Apply bonus coins on renewal
                     apply_bonus_for_tier(guild_id, subscription_tier)
                     notify_support_server(guild_id, subscription_tier)
 
             except Exception as e:
-                print("❌ DB error during renewal:", e)
+                print("❌ DB error during invoice.payment_succeeded:", e)
 
-    # ❌ Handle failed payment
+    # 3️⃣ Subscription canceled
+    elif event["type"] == "customer.subscription.deleted":
+        sub = event["data"]["object"]
+        guild_id = sub.get("metadata", {}).get("guild_id")
+        if guild_id:
+            with get_db_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE veil_subscriptions
+                        SET tier = 'free',
+                            subscribed_at = NOW(),
+                            renews_at = NULL
+                        WHERE guild_id = %s
+                    """, (guild_id,))
+                    conn.commit()
+                    print(f"❌ Subscription canceled: guild {guild_id} downgraded to free")
+
+    # 4️⃣ Payment failed → fallback to free
     elif event["type"] == "invoice.payment_failed":
         invoice = event["data"]["object"]
         subscription_id = invoice.get("subscription")
@@ -199,30 +197,13 @@ def webhook():
                                 WHERE guild_id = %s
                             ''', (guild_id,))
                             conn.commit()
-                            print(f"⚠️ Payment failed: Reverted guild {guild_id} to free tier and flagged for bot notification")
+                            print(f"⚠️ Payment failed: Reverted guild {guild_id} to free tier")
 
             except Exception as e:
-                print("❌ DB error on failed payment:", e)
+                print("❌ DB error on payment_failed:", e)
 
-    # ❌ Handle customer cancelation
-    elif event["type"] == "customer.subscription.deleted":
-        sub = event["data"]["object"]
-        guild_id = sub.get("metadata", {}).get("guild_id")
-        if guild_id:
-            with get_db_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        UPDATE veil_subscriptions
-                        SET tier = 'free',
-                            subscribed_at = NOW(),
-                            renews_at = NULL
-                    WHERE guild_id = %s
-                    """, (guild_id,))
-                    conn.commit()
-                    print(f"❌ Subscription canceled: guild {guild_id} downgraded to free")
-    
     return jsonify(success=True)
-    
+
 @app.route("/")
 def home():
     return "VeilBot Stripe Webhook Active!"
