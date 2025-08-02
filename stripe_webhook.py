@@ -37,10 +37,14 @@ tier_map = {
 
 # 🔁 Bonus helper
 def apply_bonus_for_tier(guild_id, tier):
+    # ⛔ Elite gets no coin bonus
+    if tier == "elite":
+        print(f"⛔ Skipping bonus coins for Elite guild {guild_id}")
+        return
+
     bonus_amounts = {
         "basic": 250,
-        "premium": 1000,
-        "elite": 9999
+        "premium": 1000
     }
     bonus = bonus_amounts.get(tier)
     if not bonus:
@@ -60,7 +64,6 @@ def apply_bonus_for_tier(guild_id, tier):
                 print(f"💰 Bonus coins applied: +{bonus} to all users in guild {guild_id}")
     except Exception as e:
         print("❌ Failed to apply bonus coins:", e)
-
 
 @app.route("/stripe-webhook", methods=["POST"])
 def webhook():
