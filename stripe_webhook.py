@@ -19,6 +19,18 @@ def notify_support_server(guild_id: int, tier: str):
     except Exception as e:
         print("❌ Failed to notify support server:", e)
 
+# NEW: helper to post a coin top-up line your bot will parse
+def notify_coin_topup(session_id: str, user_id: int, guild_id: int, coins: int):
+    if not SUPPORT_WEBHOOK:
+        return
+    try:
+        requests.post(SUPPORT_WEBHOOK, json={
+            "content": f"[COIN_TOPUP] session_id={session_id} user_id={user_id} guild_id={guild_id} coins={coins}"
+        }, timeout=5)
+        print(f"📨 Posted COIN_TOPUP for session {session_id} (+{coins} coins)")
+    except Exception as e:
+        print("⚠️ Failed to post COIN_TOPUP:", e)
+
 app = Flask(__name__)
 
 stripe.api_key = os.getenv("STRIPE_TEST_KEY")
@@ -34,6 +46,21 @@ tier_map = {
     "price_1RoyTeADYgCtNnMolB6Za0e4": "premium",
     "price_1RoyUCADYgCtNnMomn9anPQf": "elite",
 }
+
+# NEW: coin packs (one-time purchases)
+coin_price_map = {
+    "price_1RqrsMADYgCtNnMo6J1nKOyn": 100,   # $1
+    "price_1RqrvxADYgCtNnMoPosFAmDn": 250,   # $2
+    "price_1RqrxzADYgCtNnMoNQoG2pSO": 500,   # $3
+    "price_1RqrzBADYgCtNnMoBHbF9yLJ": 1000,  # $5
+}
+
+# small helper
+def to_int_or_none(v):
+    try:
+        return int(v) if v is not None else None
+    except Exception:
+        return None
 
 # 🔁 Bonus helper
 def apply_bonus_for_tier(guild_id, tier):
@@ -80,23 +107,70 @@ def webhook():
     # ✅ Handle checkout completion
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
-        discord_user_id = session.get("client_reference_id")
-        guild_id = session.get("metadata", {}).get("guild_id")
 
-        price_id = session.get("display_items", [{}])[0].get("price", {}).get("id")
+        mode = session.get("mode")  # "payment" (coins) or "subscription" (tiers)
+        discord_user_id = to_int_or_none(session.get("client_reference_id"))
+        md = session.get("metadata", {}) or {}
+        guild_id = to_int_or_none(md.get("guild_id"))
+
+        # Prefer what you set in metadata
+        price_id = md.get("price_id")
         if not price_id:
-            price_id = session.get("metadata", {}).get("price_id")
+            # legacy fallback
+            price_id = session.get("display_items", [{}])[0].get("price", {}).get("id")
 
         subscription_tier = tier_map.get(price_id)
         subscription_id = session.get("subscription")
 
         print("🧾 Stripe Session Info:")
+        print("  mode:", mode)
         print("  client_reference_id (user_id):", discord_user_id)
         print("  guild_id:", guild_id)
         print("  price_id:", price_id)
         print("  subscription_tier:", subscription_tier)
         print("  subscription_id:", subscription_id)
 
+        # ---------- NEW: ONE-TIME COIN PURCHASES ----------
+        if mode == "payment" and not subscription_tier:
+            # amount to add: metadata.coins preferred, else by price_id map
+            coins_from_meta = md.get("coins")
+            coins_to_add = to_int_or_none(coins_from_meta) if coins_from_meta else coin_price_map.get(price_id, 0)
+
+            if not (discord_user_id and guild_id and coins_to_add and coins_to_add > 0):
+                print("⚠️ Missing data for coin credit:", discord_user_id, guild_id, coins_to_add, price_id)
+                return jsonify(success=True)
+
+            try:
+                with get_db_conn() as conn:
+                    with conn.cursor() as cur:
+                        # ensure user row
+                        cur.execute("""
+                            INSERT INTO veil_users (user_id, guild_id, coins)
+                            VALUES (%s, %s, 0)
+                            ON CONFLICT (user_id, guild_id) DO NOTHING
+                        """, (discord_user_id, guild_id))
+
+                        # credit coins
+                        cur.execute("""
+                            UPDATE veil_users
+                            SET coins = COALESCE(coins, 0) + %s
+                            WHERE user_id = %s AND guild_id = %s
+                        """, (coins_to_add, discord_user_id, guild_id))
+
+                        conn.commit()
+
+                print(f"💰 Credited +{coins_to_add} coins to user {discord_user_id} in guild {guild_id}")
+
+                # tell the bot via your support webhook (so it can edit the purchaser's message)
+                notify_coin_topup(session["id"], discord_user_id, guild_id, coins_to_add)
+
+            except Exception as e:
+                print("❌ DB error while crediting coins:", e)
+
+            # done — don’t run the subscription logic below
+            return jsonify(success=True)
+
+        # ---------- (existing) SUBSCRIPTIONS ----------
         # 🕓 Fetch subscription renew date
         try:
             if subscription_id:
