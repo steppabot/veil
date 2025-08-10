@@ -33,8 +33,8 @@ def notify_coin_topup(session_id: str, user_id: int, guild_id: int, coins: int):
 
 app = Flask(__name__)
 
-stripe.api_key = os.getenv("STRIPE_TEST_KEY")
-endpoint_secret = os.getenv("STRIPE_TEST_WEBHOOK")
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+endpoint_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
 
 # Helper to get fresh DB connection
 def get_db_conn():
@@ -42,17 +42,17 @@ def get_db_conn():
 
 # Tier mapping
 tier_map = {
-    "price_1RowtmADYgCtNnMoK5UfUZFc": "basic",
-    "price_1RoyTeADYgCtNnMolB6Za0e4": "premium",
-    "price_1RoyUCADYgCtNnMomn9anPQf": "elite",
+    "price_1RuT1sADYgCtNnMoWMzdQ7YI": "basic",
+    "price_1RuT34ADYgCtNnModSx70nr1": "premium",
+    "price_1RuT3ZADYgCtNnMopSZon3vt": "elite",
 }
 
 # NEW: coin packs (one-time purchases)
 coin_price_map = {
-    "price_1RqrsMADYgCtNnMo6J1nKOyn": 100,   # $1
-    "price_1RqrvxADYgCtNnMoPosFAmDn": 250,   # $2
-    "price_1RqrxzADYgCtNnMoNQoG2pSO": 500,   # $3
-    "price_1RqrzBADYgCtNnMoBHbF9yLJ": 1000,  # $5
+    "price_1RuT5IADYgCtNnMorF0zsMRK": 100,   # $1
+    "price_1RuT5dADYgCtNnMoNY5O0cuc": 250,   # $2
+    "price_1RuT5yADYgCtNnMoWTUR4XMC": 500,   # $3
+    "price_1RuT6KADYgCtNnMoKwM3iw9H": 1000,  # $5
 }
 
 # small helper
