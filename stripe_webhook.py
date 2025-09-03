@@ -43,6 +43,24 @@ def notify_support_server(guild_id: int, tier: str):
     except Exception as e:
         print("❌ Failed to notify support server:", e)
 
+# ── relay a COIN_TOPUP line to your support channel so the bot's on_message sees it
+def notify_coin_topup(session_id: str, user_id: int, guild_id: int, coins: int):
+    if not SUPPORT_WEBHOOK:
+        return
+    try:
+        requests.post(
+            SUPPORT_WEBHOOK,
+            json={
+                # IMPORTANT: keep this format EXACT so your COIN_RE matches
+                "content": f"[COIN_TOPUP] session_id={session_id} user_id={user_id} guild_id={guild_id} coins={coins}",
+                "allowed_mentions": {"parse": []},  # no accidental pings
+            },
+            timeout=5
+        )
+        print(f"📨 Posted COIN_TOPUP for session {session_id} (+{coins} coins)")
+    except Exception as e:
+        print("⚠️ Failed to post COIN_TOPUP:", e)
+
 def patch_interaction_original(application_id: int | str, interaction_token: str, payload: dict):
     """
     PATCH the original interaction message (no bot token required).
@@ -219,6 +237,8 @@ def webhook():
                     patch_interaction_original(application_id, interaction_token, payload)
                 except Exception as e:
                     print(f"[coin] ❌ PATCH failed: {e}")
+
+                notify_coin_topup(stripe_session_id, discord_user_id, guild_id, coins_to_add)
 
             except Exception as e:
                 print("❌ DB error while crediting coins:", e)
