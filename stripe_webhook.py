@@ -129,30 +129,27 @@ def apply_bonus_for_tier(guild_id, tier):
 
 @app.route("/topgg-webhook", methods=["POST"])
 def topgg_webhook():
-    # Simple shared-secret check
+    # 1) Shared-secret auth from Top.gg dashboard
     auth = request.headers.get("Authorization")
     if not TOPGG_WEBHOOK_AUTH or auth != TOPGG_WEBHOOK_AUTH:
         return "Unauthorized", 401
 
+    # 2) Parse payload
     try:
         data = request.get_json(force=True, silent=False)
     except Exception:
         return "Bad JSON", 400
 
-    # Known fields: "user", "bot", "type" (e.g., "vote", "upvote", "test"), "isWeekend"
-    user_id_str = str(data.get("user") or "")
-    bot_id_str  = str(data.get("bot") or "")
-    evt_type    = str(data.get("type") or "vote").lower()
+    # known fields: user, bot, type, isWeekend
+    user_id = to_int_or_none(data.get("user"))
+    if not user_id:
+        # Ignore malformed/test payloads quietly
+        return jsonify(ok=True)
 
-    # We only care that a vote happened (ignore tests if you want)
-    if not user_id_str.isdigit():
-        return jsonify(ok=True)  # ignore weird payloads silently
-
-    user_id = int(user_id_str)
-
-    # Find the most recent unused vote session for this user
     coins_to_add = 15
+
     try:
+        # 3) Find the most recent *unused* vote session created by /vote
         with get_db_conn() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT id, guild_id, interaction_token, application_id
@@ -163,58 +160,62 @@ def topgg_webhook():
             """, (user_id,))
             row = cur.fetchone()
 
-        if not row:
-            print(f"[topgg] No pending session for user {user_id}; credit skipped.")
-            notify_topgg_vote(user_id, guild_id=0, coins=0)  # log the orphan if you like
-            return jsonify(ok=True)
+            if not row:
+                print(f"[topgg] No pending session for user {user_id}; credit skipped.")
+                notify_topgg_vote(user_id, guild_id=0, coins=0)
+                return jsonify(ok=True)
 
-        session_id, guild_id, interaction_token, application_id = row
+            session_id, guild_id, interaction_token, application_id = row
 
-        # Ensure user row exists, credit coins, mark session used, fetch new balance
-        with get_db_conn() as conn, conn.cursor() as cur:
+            # 4) Ensure user row exists, credit coins, record vote timestamp, fetch new balance
             cur.execute("""
                 INSERT INTO veil_users (user_id, guild_id, coins)
                 VALUES (%s, %s, 0)
                 ON CONFLICT (user_id, guild_id) DO NOTHING
             """, (user_id, guild_id))
-        
+
             cur.execute("""
                 UPDATE veil_users
-                   SET coins = COALESCE(coins,0) + %s,
-                       topgg_last_vote_at = NOW()                 -- 🔹 record vote time
+                   SET coins = COALESCE(coins, 0) + %s,
+                       topgg_last_vote_at = NOW()
                  WHERE user_id = %s AND guild_id = %s
              RETURNING coins
             """, (coins_to_add, user_id, guild_id))
-            new_balance = (cur.fetchone() or [None])[0]
-        
+            new_balance = (cur.fetchone() or [0])[0]
+
+            # 5) Mark the session used (idempotent)
             cur.execute("""
                 UPDATE topgg_vote_sessions
                    SET used = TRUE
-                 WHERE id = %s
+                 WHERE id = %s AND used = FALSE
             """, (session_id,))
-            conn.commit()
-            
-        # Build PATCH payload (use plain unicode emoji server-side)
-        coins_str = f"{coins_to_add:,}"
-        bal_str   = f"{(new_balance or 0):,}"
+
+        # 6) Patch the original /vote message with the *real* new balance
+        coins_str = fmt(coins_to_add)
+        bal_str   = fmt(new_balance or 0)
         payload = {
             "embeds": [{
-                "title": f"⭐ Thanks for voting on top.gg!",
-                "description": f"**+{coins_str} Veil Coins** have been added to your balance.\n\nNew balance: **{bal_str}**",
+                "title": "⭐ Thanks for voting on top.gg!",
+                "description": (
+                    f"**+{coins_str} Veil Coins** have been added to your balance.\n\n"
+                    f"New balance: **{bal_str}**"
+                ),
                 "color": 0xeeac00,
                 "footer": {"text": "You can vote again in 12 hours."}
             }],
             "components": []
         }
 
-        # PATCH the ephemeral message we sent in /vote
         try:
             patch_interaction_original(application_id, interaction_token, payload)
         except Exception as e:
             print(f"[topgg] PATCH failed: {e}")
 
+        # 7) Log to support channel
         notify_topgg_vote(user_id, guild_id, coins_to_add)
+
         return jsonify(ok=True)
+
     except Exception as e:
         print("❌ topgg_webhook error:", e)
         return "Server error", 500
