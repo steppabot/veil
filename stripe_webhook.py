@@ -183,6 +183,12 @@ def topgg_webhook():
             """, (coins_to_add, user_id, guild_id))
             new_balance = (cur.fetchone() or [0])[0]
 
+            cur.execute("""
+                INSERT INTO vote_events (provider, user_id, guild_id, voted_at, nonce)
+                VALUES (%s, %s, %s, NOW(), %s)
+                ON CONFLICT (nonce) DO NOTHING
+            """, ("topgg", user_id, guild_id, str(session_id)))
+
             # 5) Mark the session used (idempotent)
             cur.execute("""
                 UPDATE topgg_vote_sessions
